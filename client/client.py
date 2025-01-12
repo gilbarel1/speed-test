@@ -200,9 +200,9 @@ class SpeedTestClient:
                 self.stats.successful_connections += 1
                 self.stats.total_bytes_received += received
 
-                print(f"{Fore.GREEN}TCP #{transfer_num} transfer complete{Style.RESET_ALL}")
-                print(f"  Time: {duration:.2f} seconds")
-                print(f"  Speed: {speed_mbps:.2f} Mbps")
+                print(f"{Fore.GREEN}TCP #{transfer_num} transfer finished{Style.RESET_ALL}")
+                print(f"  Total Time: {duration:.2f} seconds")
+                print(f"  Total Speed: {speed_mbps:.2f} Mbps")
                 print(
                     f"{Fore.GREEN}TCP transfer #{transfer_num} finished, total time: {duration:.2f} seconds, total speed: {speed:.2f} bits/second{Style.RESET_ALL}")
 
@@ -279,10 +279,10 @@ class SpeedTestClient:
             self.stats.successful_connections += 1
             self.stats.total_bytes_received += total_received
 
-            print(f"{Fore.GREEN}UDP #{transfer_num} transfer complete{Style.RESET_ALL}")
-            print(f"  Time: {duration:.2f} seconds")
-            print(f"  Speed: {speed / 1000000:.2f} Mbps")
-            print(f"  Packet success rate: {success_rate:.1f}%")
+            print(f"{Fore.GREEN}UDP #{transfer_num} transfer finished{Style.RESET_ALL}")
+            print(f"  Total Time: {duration:.2f} seconds")
+            print(f"  Total Speed: {speed / 1000000:.2f} Mbps")
+            print(f"  percentage of packets received successfully:  {success_rate:.1f}%")
 
         except Exception as e:
             print(f"{Fore.RED}Error in UDP transfer #{transfer_num}: {str(e)}{Style.RESET_ALL}")
@@ -303,7 +303,7 @@ class SpeedTestClient:
                         self.start_speed_test()
                         self.stats.print_summary()
                         self.state = ClientState.LOOKING_FOR_SERVER  # Reset state to continue listening
-                        print(f"\n{Fore.YELLOW}Listening for server offers...{Style.RESET_ALL}")
+                        print(f"\n{Fore.YELLOW}Client started, Listening for server offers...{Style.RESET_ALL}")
 
                 elif self.state == ClientState.SPEED_TEST:
                     print(f"{Fore.GREEN}Test complete{Style.RESET_ALL}")
