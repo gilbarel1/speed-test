@@ -2,7 +2,12 @@ import socket
 import struct
 import time
 import threading
+from colorama import init, Fore, Back, Style
+import statistics
+import datetime
 
+# Initialize colorama
+init()
 
 MAGIC_COOKIE = 0xabcddcba
 MSG_TYPE_OFFER = 0x2
@@ -13,11 +18,55 @@ OFFER_FORMAT = '!IBHH'  # magic cookie, msg type, udp port, tcp port
 REQUEST_FORMAT = '!IBQ'  # magic cookie, msg type, file size
 PAYLOAD_FORMAT = '!IBQQ'  # magic cookie, msg type, total segments, current segment
 
+
 class ClientState:
     STARTUP = 1
     LOOKING_FOR_SERVER = 2
     SPEED_TEST = 3
-    
+
+
+class Statistics:
+    def __init__(self):
+        self.transfer_speeds = []
+        self.packet_loss_rates = []
+        self.latencies = []
+        self.start_time = None
+        self.connection_attempts = 0
+        self.successful_connections = 0
+        self.total_bytes_received = 0
+
+    def add_speed_measurement(self, speed):
+        self.transfer_speeds.append(speed)
+
+    def add_packet_loss(self, loss_rate):
+        self.packet_loss_rates.append(loss_rate)
+
+    def add_latency(self, latency):
+        self.latencies.append(latency)
+
+    def print_summary(self):
+        print(f"\n{Fore.CYAN}=== Test Summary ==={Style.RESET_ALL}")
+        if self.transfer_speeds:
+            print(f"{Fore.GREEN}Transfer Speeds{Style.RESET_ALL}")
+            print(f"  Average: {statistics.mean(self.transfer_speeds) / 1000000:.2f} Mbps")
+            print(f"  Min: {min(self.transfer_speeds) / 1000000:.2f} Mbps")
+            print(f"  Max: {max(self.transfer_speeds) / 1000000:.2f} Mbps")
+
+        if self.packet_loss_rates:
+            print(f"\n{Fore.YELLOW}Packet Loss{Style.RESET_ALL}")
+            print(f"  Average: {statistics.mean(self.packet_loss_rates):.2f}%")
+
+        if self.latencies:
+            print(f"\n{Fore.MAGENTA}Latency{Style.RESET_ALL}")
+            print(f"  Average: {statistics.mean(self.latencies):.2f} ms")
+            print(f"  Jitter: {statistics.stdev(self.latencies):.2f} ms")
+
+        print(f"\n{Fore.BLUE}Connection Statistics{Style.RESET_ALL}")
+        success_rate = (
+                    self.successful_connections / self.connection_attempts * 100) if self.connection_attempts > 0 else 0
+        print(f"  Success Rate: {success_rate:.1f}%")
+        print(f"  Total Data Received: {self.total_bytes_received / (1024 * 1024):.2f} MB")
+
 
 class SpeedTestClient:
     def __init__(self):
@@ -28,27 +77,48 @@ class SpeedTestClient:
         self.server_ip = None
         self.udp_port = None
         self.tcp_port = None
-        
+        self.stats = Statistics()
+
     def get_user_parameters(self):
-        """Get file size and connection counts from user"""
-        print("Enter test parameters:")
-        self.file_size = int(input("File size (bytes): "))
-        self.tcp_connections = int(input("TCP connections: "))
-        self.udp_connections = int(input("UDP connections: "))
+        """Get file size and connection counts from user with validation"""
+        print(f"{Fore.CYAN}Enter test parameters:{Style.RESET_ALL}")
+        while True:
+            try:
+                file_size = input(f"{Fore.GREEN}File size (bytes):{Style.RESET_ALL} ")
+                self.file_size = int(file_size)
+                if self.file_size <= 0:
+                    raise ValueError("File size must be positive")
+
+                tcp_conn = input(f"{Fore.GREEN}TCP connections:{Style.RESET_ALL} ")
+                self.tcp_connections = int(tcp_conn)
+                if self.tcp_connections < 0:
+                    raise ValueError("TCP connections cannot be negative")
+
+                udp_conn = input(f"{Fore.GREEN}UDP connections:{Style.RESET_ALL} ")
+                self.udp_connections = int(udp_conn)
+                if self.udp_connections < 0:
+                    raise ValueError("UDP connections cannot be negative")
+
+                if self.tcp_connections + self.udp_connections == 0:
+                    raise ValueError("At least one connection type must be specified")
+
+                break
+            except ValueError as e:
+                print(f"{Fore.RED}Invalid input: {str(e)}{Style.RESET_ALL}")
+
         self.state = ClientState.LOOKING_FOR_SERVER
-        
+
     def listen_for_offers(self):
-        """Listen for server offers"""
-        print("Client started, listening for offer requests...")
+        print(f"{Fore.YELLOW}Listening for server offers...{Style.RESET_ALL}")
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.bind(('', 13117))
-        
+
         while self.state == ClientState.LOOKING_FOR_SERVER:
             try:
                 data, addr = sock.recvfrom(struct.calcsize(OFFER_FORMAT))
                 magic_cookie, msg_type, udp_port, tcp_port = struct.unpack(OFFER_FORMAT, data)
-                
+
                 if magic_cookie == MAGIC_COOKIE and msg_type == MSG_TYPE_OFFER:
                     self.server_ip = addr[0]
                     self.udp_port = udp_port
@@ -59,111 +129,168 @@ class SpeedTestClient:
             except Exception as e:
                 print(f"Error receiving offer: {e}")
         return False
-    
+
     def start_speed_test(self):
         """Launch parallel TCP and UDP transfers"""
+        print(f"{Fore.CYAN}Starting speed test with server {self.server_ip}{Style.RESET_ALL}")
         threads = []
 
         # Start TCP transfers
         for i in range(self.tcp_connections):
-            t = threading.Thread(target=self.handle_tcp_transfer, args=(i+1,))
+            t = threading.Thread(target=self.handle_tcp_transfer, args=(i + 1,))
             threads.append(t)
             t.start()
 
-        # Start UDP transfers    
+        # Start UDP transfers
         for i in range(self.udp_connections):
-            t = threading.Thread(target=self.handle_udp_transfer, args=(i+1,))
+            t = threading.Thread(target=self.handle_udp_transfer, args=(i + 1,))
             threads.append(t)
             t.start()
 
         # Wait for completion
         for t in threads:
             t.join()
-            
-            
+
     def handle_tcp_transfer(self, transfer_num):
         try:
+            self.stats.connection_attempts += 1
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+            print(f"{Fore.YELLOW}TCP #{transfer_num}: Connecting to {self.server_ip}:{self.tcp_port}{Style.RESET_ALL}")
             sock.connect((self.server_ip, self.tcp_port))
-            
+
+            # Measure initial latency
+            ping_start = time.time()
+            sock.send(b"PING")
+            sock.recv(4)
+            latency = (time.time() - ping_start) * 1000
+            self.stats.add_latency(latency)
+
             # Send request
             request = f"{self.file_size}\n".encode()
             sock.send(request)
-            
+
             start_time = time.time()
             received = 0
-            
+            chunk_size = 65536
+
             while received < self.file_size:
-                data = sock.recv(1024 + struct.calcsize(PAYLOAD_FORMAT))
+                data = sock.recv(chunk_size)
                 if not data:
                     break
-                # Unpack header
-                header = data[:struct.calcsize(PAYLOAD_FORMAT)]
-                magic_cookie, msg_type, total_segs, curr_seg = struct.unpack(PAYLOAD_FORMAT, header)
-                
-                if magic_cookie == MAGIC_COOKIE and msg_type == MSG_TYPE_PAYLOAD:  
-                    payload = data[struct.calcsize(PAYLOAD_FORMAT):]
-                    received += len(payload)
-                else:
-                    print("Invalid packet received")
-                    break
-                
+                received += len(data)
+
+                # Update progress periodically
+                if received % (1024 * 1024) == 0:  # Every 1MB
+                    print(f"{Fore.CYAN}TCP #{transfer_num}: Received {received / 1024 / 1024:.1f}MB{Style.RESET_ALL}")
+
             duration = time.time() - start_time
-            speed = (received * 8) / duration
-            print(f"TCP transfer #{transfer_num} finished, total time: {duration:.2f} seconds, total speed: {speed:.1f} bits/second")
-        
+            speed = (received * 8) / duration if duration > 0 else 0
+            self.stats.add_speed_measurement(speed)
+            self.stats.successful_connections += 1
+            self.stats.total_bytes_received += received
+
+            print(f"{Fore.GREEN}TCP #{transfer_num} transfer complete{Style.RESET_ALL}")
+            print(f"  Time: {duration:.2f} seconds")
+            print(f"  Speed: {speed / 1000000:.2f} Mbps")
+            print(f"  Latency: {latency:.2f} ms")
+
+        except Exception as e:
+            print(f"{Fore.RED}Error in TCP transfer #{transfer_num}: {str(e)}{Style.RESET_ALL}")
+
         finally:
             sock.close()
-            
-            
+
     def handle_udp_transfer(self, transfer_num):
         try:
+            self.stats.connection_attempts += 1
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(1.0)
-            
-            # Send request packet
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8388608)
+
+            print(
+                f"{Fore.YELLOW}UDP #{transfer_num}: Starting transfer with {self.server_ip}:{self.udp_port}{Style.RESET_ALL}")
+
             request = struct.pack(REQUEST_FORMAT, MAGIC_COOKIE, MSG_TYPE_REQUEST, self.file_size)
             sock.sendto(request, (self.server_ip, self.udp_port))
-            
+
             start_time = time.time()
-            received_packets = set()
-            total_packets = 0
-            
+            received_packets = {}
+            expected_segments = None
+            total_received = 0
+            last_receive_time = time.time()
+            chunk_size = 8192
+
             while True:
                 try:
-                    data = sock.recv(1024 + struct.calcsize(PAYLOAD_FORMAT))
+                    data = sock.recv(chunk_size + struct.calcsize(PAYLOAD_FORMAT))
+                    current_time = time.time()
+                    last_receive_time = current_time
+
                     header = data[:struct.calcsize(PAYLOAD_FORMAT)]
                     magic_cookie, msg_type, total_segs, curr_seg = struct.unpack(PAYLOAD_FORMAT, header)
-                    
+
                     if magic_cookie == MAGIC_COOKIE and msg_type == MSG_TYPE_PAYLOAD:
-                        received_packets.add(curr_seg)
-                        total_packets += 1
-                    else:
-                        print("Invalid packet received")
-                        break         
+                        if expected_segments is None:
+                            expected_segments = total_segs
+                        payload = data[struct.calcsize(PAYLOAD_FORMAT):]
+                        received_packets[curr_seg] = payload
+                        total_received += len(payload)
+
+                        # Progress update
+                        if total_received % (1024 * 1024) == 0:  # Every 1MB
+                            print(
+                                f"{Fore.CYAN}UDP #{transfer_num}: Received {total_received / 1024 / 1024:.1f}MB{Style.RESET_ALL}")
+
+                        if total_received >= self.file_size:
+                            break
+
                 except socket.timeout:
-                    break
-                    
+                    if time.time() - last_receive_time >= 1.0:
+                        break
+                    continue
+
             duration = time.time() - start_time
-            success_rate = (len(received_packets) / total_packets * 100) if total_packets > 0 else 0
-            speed = (len(received_packets) * 1024 * 8) / duration
-            
-            print(f"UDP transfer #{transfer_num} finished, total time: {duration:.2f} seconds, "
-                f"total speed: {speed:.1f} bits/second, percentage of packets received successfully: {success_rate:.1f}%")
-              
+            success_rate = (len(received_packets) / expected_segments * 100) if expected_segments else 0
+            speed = (total_received * 8) / duration if duration > 0 else 0
+
+            self.stats.add_speed_measurement(speed)
+            self.stats.add_packet_loss(100 - success_rate)
+            self.stats.successful_connections += 1
+            self.stats.total_bytes_received += total_received
+
+            print(f"{Fore.GREEN}UDP #{transfer_num} transfer complete{Style.RESET_ALL}")
+            print(f"  Time: {duration:.2f} seconds")
+            print(f"  Speed: {speed / 1000000:.2f} Mbps")
+            print(f"  Packet success rate: {success_rate:.1f}%")
+
+        except Exception as e:
+            print(f"{Fore.RED}Error in UDP transfer #{transfer_num}: {str(e)}{Style.RESET_ALL}")
+
         finally:
             sock.close()
 
     def run(self):
-        """Main client loop"""
-        while True:
-            if self.state == ClientState.STARTUP:
-                self.get_user_parameters()
-                
-            elif self.state == ClientState.LOOKING_FOR_SERVER:
-                if self.listen_for_offers():
-                    self.start_speed_test()
-                    
-            elif self.state == ClientState.SPEED_TEST:
-                print("All transfers complete, listening to offer requests")
-                self.state = ClientState.LOOKING_FOR_SERVER
+        """Main client loop with improved error handling and statistics"""
+        self.stats.start_time = datetime.datetime.now()
+        try:
+            while True:
+                if self.state == ClientState.STARTUP:
+                    self.get_user_parameters()
+
+                elif self.state == ClientState.LOOKING_FOR_SERVER:
+                    if self.listen_for_offers():
+                        self.start_speed_test()
+                        self.stats.print_summary()
+                        print(f"\n{Fore.YELLOW}Waiting for next test...{Style.RESET_ALL}")
+
+                elif self.state == ClientState.SPEED_TEST:
+                    print(f"{Fore.GREEN}Test complete{Style.RESET_ALL}")
+                    self.state = ClientState.LOOKING_FOR_SERVER
+
+        except KeyboardInterrupt:
+            print(f"\n{Fore.YELLOW}Test interrupted by user{Style.RESET_ALL}")
+            self.stats.print_summary()
+        except Exception as e:
+            print(f"{Fore.RED}Error: {str(e)}{Style.RESET_ALL}")
