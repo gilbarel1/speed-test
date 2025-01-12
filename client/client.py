@@ -3,6 +3,7 @@ import struct
 import time
 import threading
 from colorama import init, Fore, Back, Style
+from tqdm import tqdm
 import statistics
 import datetime
 
@@ -109,7 +110,7 @@ class SpeedTestClient:
         self.state = ClientState.LOOKING_FOR_SERVER
 
     def listen_for_offers(self):
-        print(f"{Fore.YELLOW}Listening for server offers...{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Client started, Listening for server offers...{Style.RESET_ALL}")
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.bind(('', 13117))
@@ -151,56 +152,68 @@ class SpeedTestClient:
         for t in threads:
             t.join()
 
+        print(f"{Fore.GREEN}All transfers complete, listening to offer requests{Style.RESET_ALL}")
+        self.state = ClientState.LOOKING_FOR_SERVER
+
     def handle_tcp_transfer(self, transfer_num):
         try:
             self.stats.connection_attempts += 1
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.settimeout(5)
 
             print(f"{Fore.YELLOW}TCP #{transfer_num}: Connecting to {self.server_ip}:{self.tcp_port}{Style.RESET_ALL}")
             sock.connect((self.server_ip, self.tcp_port))
-
-            # Measure initial latency
-            ping_start = time.time()
-            sock.send(b"PING")
-            sock.recv(4)
-            latency = (time.time() - ping_start) * 1000
-            self.stats.add_latency(latency)
+            print(f"{Fore.CYAN}TCP #{transfer_num}: Connected successfully{Style.RESET_ALL}")
 
             # Send request
-            request = f"{self.file_size}\n".encode()
+            request = str(self.file_size).encode() + b"\n"
             sock.send(request)
 
             start_time = time.time()
             received = 0
             chunk_size = 65536
 
+            # Create progress bar
+            pbar = tqdm(
+                total=self.file_size,
+                unit='B',
+                unit_scale=True,
+                desc=f"TCP #{transfer_num}",
+                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'
+            )
+
             while received < self.file_size:
                 data = sock.recv(chunk_size)
                 if not data:
                     break
                 received += len(data)
+                pbar.update(len(data))
 
-                # Update progress periodically
-                if received % (1024 * 1024) == 0:  # Every 1MB
-                    print(f"{Fore.CYAN}TCP #{transfer_num}: Received {received / 1024 / 1024:.1f}MB{Style.RESET_ALL}")
-
+            pbar.close()
             duration = time.time() - start_time
             speed = (received * 8) / duration if duration > 0 else 0
-            self.stats.add_speed_measurement(speed)
-            self.stats.successful_connections += 1
-            self.stats.total_bytes_received += received
+            speed_mbps = speed / 1_000_000
 
-            print(f"{Fore.GREEN}TCP #{transfer_num} transfer complete{Style.RESET_ALL}")
-            print(f"  Time: {duration:.2f} seconds")
-            print(f"  Speed: {speed / 1000000:.2f} Mbps")
-            print(f"  Latency: {latency:.2f} ms")
+            if received > 0:
+                self.stats.add_speed_measurement(speed)
+                self.stats.successful_connections += 1
+                self.stats.total_bytes_received += received
+
+                print(f"{Fore.GREEN}TCP #{transfer_num} transfer complete{Style.RESET_ALL}")
+                print(f"  Time: {duration:.2f} seconds")
+                print(f"  Speed: {speed_mbps:.2f} Mbps")
+                print(
+                    f"{Fore.GREEN}TCP transfer #{transfer_num} finished, total time: {duration:.2f} seconds, total speed: {speed:.2f} bits/second{Style.RESET_ALL}")
 
         except Exception as e:
             print(f"{Fore.RED}Error in TCP transfer #{transfer_num}: {str(e)}{Style.RESET_ALL}")
 
         finally:
-            sock.close()
+            try:
+                sock.close()
+            except:
+                pass
 
     def handle_udp_transfer(self, transfer_num):
         try:
@@ -222,6 +235,15 @@ class SpeedTestClient:
             last_receive_time = time.time()
             chunk_size = 8192
 
+            # Create progress bar for UDP
+            pbar = tqdm(
+                total=self.file_size,
+                unit='B',
+                unit_scale=True,
+                desc=f"UDP #{transfer_num}",
+                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'
+            )
+
             while True:
                 try:
                     data = sock.recv(chunk_size + struct.calcsize(PAYLOAD_FORMAT))
@@ -237,11 +259,7 @@ class SpeedTestClient:
                         payload = data[struct.calcsize(PAYLOAD_FORMAT):]
                         received_packets[curr_seg] = payload
                         total_received += len(payload)
-
-                        # Progress update
-                        if total_received % (1024 * 1024) == 0:  # Every 1MB
-                            print(
-                                f"{Fore.CYAN}UDP #{transfer_num}: Received {total_received / 1024 / 1024:.1f}MB{Style.RESET_ALL}")
+                        pbar.update(len(payload))
 
                         if total_received >= self.file_size:
                             break
@@ -251,6 +269,7 @@ class SpeedTestClient:
                         break
                     continue
 
+            pbar.close()
             duration = time.time() - start_time
             success_rate = (len(received_packets) / expected_segments * 100) if expected_segments else 0
             speed = (total_received * 8) / duration if duration > 0 else 0
@@ -283,7 +302,8 @@ class SpeedTestClient:
                     if self.listen_for_offers():
                         self.start_speed_test()
                         self.stats.print_summary()
-                        print(f"\n{Fore.YELLOW}Waiting for next test...{Style.RESET_ALL}")
+                        self.state = ClientState.LOOKING_FOR_SERVER  # Reset state to continue listening
+                        print(f"\n{Fore.YELLOW}Listening for server offers...{Style.RESET_ALL}")
 
                 elif self.state == ClientState.SPEED_TEST:
                     print(f"{Fore.GREEN}Test complete{Style.RESET_ALL}")
