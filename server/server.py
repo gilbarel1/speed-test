@@ -67,7 +67,7 @@ def broadcast_offers(udp_port, tcp_port):
 class UDPHandler:
     def __init__(self, udp_socket):
         self.udp_socket = udp_socket
-        self.chunk_size = 8192
+        self.chunk_size = 1472
 
     def handle_requests(self):
         while True:
@@ -115,7 +115,7 @@ class UDPHandler:
                 sequence_number += 1
                 sent_bytes += to_send
 
-                if sequence_number % 100 == 0:
+                if sequence_number % 50 == 0:
                     time.sleep(0.001)
 
             duration = time.time() - start_time

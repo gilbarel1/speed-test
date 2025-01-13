@@ -45,28 +45,34 @@ class Statistics:
     def add_latency(self, latency):
         self.latencies.append(latency)
 
+
     def print_summary(self):
-        print(f"\n{Fore.CYAN}=== Test Summary ==={Style.RESET_ALL}")
+        print("\n" + "=" * 50)
+        print(f"{Fore.CYAN}=== Test Summary ==={Style.RESET_ALL}")
+        print("=" * 50 + "\n")
+
         if self.transfer_speeds:
             print(f"{Fore.GREEN}Transfer Speeds{Style.RESET_ALL}")
-            print(f"  Average: {statistics.mean(self.transfer_speeds) / 1000000:.2f} Mbps")
-            print(f"  Min: {min(self.transfer_speeds) / 1000000:.2f} Mbps")
-            print(f"  Max: {max(self.transfer_speeds) / 1000000:.2f} Mbps")
+            print(f"  Average: {statistics.mean(self.transfer_speeds)/1000000:8.2f} Mbps")
+            print(f"  Min:     {min(self.transfer_speeds)/1000000:8.2f} Mbps")
+            print(f"  Max:     {max(self.transfer_speeds)/1000000:8.2f} Mbps")
+            print()
 
         if self.packet_loss_rates:
-            print(f"\n{Fore.YELLOW}Packet Loss{Style.RESET_ALL}")
-            print(f"  Average: {statistics.mean(self.packet_loss_rates):.2f}%")
+            print(f"{Fore.YELLOW}Packet Loss{Style.RESET_ALL}")
+            print(f"  Average: {statistics.mean(self.packet_loss_rates):8.2f}%")
+            print()
 
         if self.latencies:
             print(f"\n{Fore.MAGENTA}Latency{Style.RESET_ALL}")
             print(f"  Average: {statistics.mean(self.latencies):.2f} ms")
             print(f"  Jitter: {statistics.stdev(self.latencies):.2f} ms")
 
-        print(f"\n{Fore.BLUE}Connection Statistics{Style.RESET_ALL}")
-        success_rate = (
-                    self.successful_connections / self.connection_attempts * 100) if self.connection_attempts > 0 else 0
-        print(f"  Success Rate: {success_rate:.1f}%")
-        print(f"  Total Data Received: {self.total_bytes_received / (1024 * 1024):.2f} MB")
+        print(f"{Fore.BLUE}Connection Statistics{Style.RESET_ALL}")
+        success_rate = (self.successful_connections / self.connection_attempts * 100) if self.connection_attempts > 0 else 0
+        print(f"  Success Rate:       {success_rate:8.1f}%")
+        print(f"  Total Data:         {self.total_bytes_received / (1024*1024):8.2f} MB")
+        print("\n" + "="*50)
 
 
 class SpeedTestClient:
@@ -79,6 +85,16 @@ class SpeedTestClient:
         self.udp_port = None
         self.tcp_port = None
         self.stats = Statistics()
+        self.print_lock = threading.Lock()
+
+    def update_progress(self, pbar, bytes_received, speed=None):
+        pbar.update(bytes_received)
+        if speed:
+            pbar.set_postfix_str(f"{speed / 1000000:.2f} Mbps", refresh=True)
+
+    def safe_print(self, message):
+        with self.print_lock:
+            print(message)
 
     def get_user_parameters(self):
         """Get file size and connection counts from user with validation"""
@@ -183,7 +199,9 @@ class SpeedTestClient:
                 unit='B',
                 unit_scale=True,
                 desc=f"TCP #{transfer_num}",
-                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'
+                bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
+                position=transfer_num - 1,
+                leave=False  # Don't leave the bar after completion
             )
 
             while received < self.file_size:
@@ -191,7 +209,9 @@ class SpeedTestClient:
                 if not data:
                     break
                 received += len(data)
-                pbar.update(len(data))
+                elapsed = time.time() - start_time
+                speed = (received * 8) / elapsed if elapsed > 0 else 0
+                self.update_progress(pbar, len(data), speed)
 
             pbar.close()
             duration = time.time() - start_time
@@ -223,7 +243,7 @@ class SpeedTestClient:
             self.stats.connection_attempts += 1
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(1.0)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8388608)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16777216)
 
             print(
                 f"{Fore.YELLOW}UDP #{transfer_num}: Starting transfer with {self.server_ip}:{self.udp_port}{Style.RESET_ALL}")
@@ -236,7 +256,7 @@ class SpeedTestClient:
             expected_segments = None
             total_received = 0
             last_receive_time = time.time()
-            chunk_size = 8192
+            chunk_size = 1472
 
             # Create progress bar for UDP
             pbar = tqdm(
@@ -244,7 +264,9 @@ class SpeedTestClient:
                 unit='B',
                 unit_scale=True,
                 desc=f"UDP #{transfer_num}",
-                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'
+                bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
+                position=self.tcp_connections + transfer_num - 1,  # Position after TCP bars
+                leave=False
             )
 
             while True:
@@ -262,7 +284,9 @@ class SpeedTestClient:
                         payload = data[struct.calcsize(PAYLOAD_FORMAT):]
                         received_packets[curr_seg] = payload
                         total_received += len(payload)
-                        pbar.update(len(payload))
+                        elapsed = time.time() - start_time
+                        speed = (total_received * 8) / elapsed if elapsed > 0 else 0
+                        self.update_progress(pbar, len(payload), speed)
 
                         if total_received >= self.file_size:
                             break
