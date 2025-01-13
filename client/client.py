@@ -113,6 +113,9 @@ class SpeedTestClient:
         print(f"{Fore.YELLOW}Client started, Listening for server offers...{Style.RESET_ALL}")
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, 'SO_REUSEPORT'):  # Not available on all platforms
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         sock.bind(('', 13117))
 
         while self.state == ClientState.LOOKING_FOR_SERVER:
