@@ -67,7 +67,7 @@ def broadcast_offers(udp_port, tcp_port):
 class UDPHandler:
     def __init__(self, udp_socket):
         self.udp_socket = udp_socket
-        self.chunk_size = 1472
+        self.chunk_size = 1024
 
     def handle_requests(self):
         while True:
@@ -100,23 +100,47 @@ class UDPHandler:
             data_chunk = b"x" * chunk_size
 
             print(f"{Fore.CYAN}Starting UDP transfer to {client_addr[0]}:{client_addr[1]}{Style.RESET_ALL}")
+            self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 32777216)
+
+            # Send in smaller batches with more controlled timing
+            batch_size = 50
+            packets_sent = 0
+            last_time = time.time()
+            target_speed = 50 * 1024 * 1024  # 50 MB/s target
 
             while sent_bytes < requested_size:
-                to_send = min(chunk_size, requested_size - sent_bytes)
-                header = struct.pack(PAYLOAD_FORMAT, MAGIC_COOKIE,
-                                     MSG_TYPE_PAYLOAD, total_segments, sequence_number)
+                current_time = time.time()
+                elapsed = current_time - last_time
 
-                if to_send == chunk_size:
-                    packet = header + data_chunk
-                else:
-                    packet = header + (b"x" * to_send)
+                # Calculate how many packets we should have sent by now
+                target_packets = int((current_time - start_time) * (target_speed / chunk_size))
 
-                self.udp_socket.sendto(packet, client_addr)
-                sequence_number += 1
-                sent_bytes += to_send
-
-                if sequence_number % 50 == 0:
+                # If we're ahead of schedule, sleep
+                if packets_sent > target_packets:
                     time.sleep(0.001)
+                    continue
+
+                # Send a small batch
+                for _ in range(batch_size):
+                    if sent_bytes >= requested_size:
+                        break
+
+                    to_send = min(chunk_size, requested_size - sent_bytes)
+                    header = struct.pack(PAYLOAD_FORMAT, MAGIC_COOKIE,
+                                         MSG_TYPE_PAYLOAD, total_segments, sequence_number)
+
+                    packet = header + (data_chunk if to_send == chunk_size else (b"x" * to_send))
+                    self.udp_socket.sendto(packet, client_addr)
+
+                    sequence_number += 1
+                    sent_bytes += to_send
+                    packets_sent += 1
+
+                    # Very small sleep between packets in the batch
+                    time.sleep(0.0001)
+
+                # Update timing
+                last_time = time.time()
 
             duration = time.time() - start_time
             speed = (sent_bytes * 8) / duration if duration > 0 else 0

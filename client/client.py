@@ -92,9 +92,9 @@ class SpeedTestClient:
         if speed:
             pbar.set_postfix_str(f"{speed / 1000000:.2f} Mbps", refresh=True)
 
-    def safe_print(self, message):
-        with self.print_lock:
-            print(message)
+    # def safe_print(self, message):
+    #     with self.print_lock:
+    #         print(message)
 
     def get_user_parameters(self):
         """Get file size and connection counts from user with validation"""
@@ -223,6 +223,7 @@ class SpeedTestClient:
                 self.stats.successful_connections += 1
                 self.stats.total_bytes_received += received
 
+
                 print(f"{Fore.GREEN}TCP #{transfer_num} transfer finished{Style.RESET_ALL}")
                 print(f"  Total Time: {duration:.2f} seconds")
                 print(f"  Total Speed: {speed_mbps:.2f} Mbps")
@@ -239,11 +240,12 @@ class SpeedTestClient:
                 pass
 
     def handle_udp_transfer(self, transfer_num):
+        pbar = None
         try:
             self.stats.connection_attempts += 1
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.settimeout(1.0)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16777216)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32777216)
 
             print(
                 f"{Fore.YELLOW}UDP #{transfer_num}: Starting transfer with {self.server_ip}:{self.udp_port}{Style.RESET_ALL}")
@@ -256,16 +258,16 @@ class SpeedTestClient:
             expected_segments = None
             total_received = 0
             last_receive_time = time.time()
-            chunk_size = 1472
+            chunk_size = 1472  # Optimized UDP packet size
 
-            # Create progress bar for UDP
+            # Create progress bar with clear position
             pbar = tqdm(
                 total=self.file_size,
                 unit='B',
                 unit_scale=True,
                 desc=f"UDP #{transfer_num}",
                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
-                position=self.tcp_connections + transfer_num - 1,  # Position after TCP bars
+                position=self.tcp_connections + transfer_num - 1,
                 leave=False
             )
 
@@ -296,26 +298,34 @@ class SpeedTestClient:
                         break
                     continue
 
-            pbar.close()
-            duration = time.time() - start_time
-            success_rate = (len(received_packets) / expected_segments * 100) if expected_segments else 0
-            speed = (total_received * 8) / duration if duration > 0 else 0
-
-            self.stats.add_speed_measurement(speed)
-            self.stats.add_packet_loss(100 - success_rate)
-            self.stats.successful_connections += 1
-            self.stats.total_bytes_received += total_received
-
-            print(f"{Fore.GREEN}UDP #{transfer_num} transfer finished{Style.RESET_ALL}")
-            print(f"  Total Time: {duration:.2f} seconds")
-            print(f"  Total Speed: {speed / 1000000:.2f} Mbps")
-            print(f"  percentage of packets received successfully:  {success_rate:.1f}%")
-
         except Exception as e:
             print(f"{Fore.RED}Error in UDP transfer #{transfer_num}: {str(e)}{Style.RESET_ALL}")
 
         finally:
-            sock.close()
+            if pbar:
+                pbar.clear()  # Clear the progress bar
+                pbar.close()  # Properly close the progress bar
+            try:
+                sock.close()
+            except:
+                pass
+
+            # Calculate and display final statistics
+            duration = time.time() - start_time if 'start_time' in locals() else 0
+            if 'total_received' in locals() and 'expected_segments' in locals():
+                success_rate = (len(received_packets) / expected_segments * 100) if expected_segments else 0
+                speed = (total_received * 8) / duration if duration > 0 else 0
+
+                self.stats.add_speed_measurement(speed)
+                self.stats.add_packet_loss(100 - success_rate)
+                self.stats.successful_connections += 1
+                self.stats.total_bytes_received += total_received
+
+                print(f"{Fore.GREEN}UDP #{transfer_num} transfer finished{Style.RESET_ALL}")
+                print(f"  Total Time: {duration:.2f} seconds")
+                print(f"  Total Speed: {speed / 1000000:.2f} Mbps")
+                print(f"  Percentage of packets received successfully: {success_rate:.1f}%")
+
 
     def run(self):
         """Main client loop with improved error handling and statistics"""
